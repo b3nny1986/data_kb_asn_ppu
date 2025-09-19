@@ -186,7 +186,7 @@ def main():
         st.dataframe(
             show_df,
             use_container_width=True,
-            height=100
+            height=210
         )
     else:
         st.info("Data tidak ditemukan.")
