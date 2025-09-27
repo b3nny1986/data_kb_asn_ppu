@@ -9,6 +9,17 @@ st.set_page_config(layout="wide")
 
 DATA_FILE = "hasil_pencarian.csv"
 CRED_FILE = "user_cred.txt"
+STATUS_FILE = "status_kendaraan.csv"
+TAMBAH_FILE = "data_kendaraan_baru.csv"
+
+# Tampilkan logo di bagian atas
+col_logo1, col_logo2, col_title = st.columns([1,1,6])
+with col_logo1:
+    st.image("logo_kaltim.png", width=80, caption="UPTD PPRD Wilayah PPU")
+with col_logo2:
+    st.image("logo_ppu.png", width=80, caption="Bapenda PPU")
+with col_title:
+    st.title("Daftar Kendaraan ASN Kabupaten PPU")
 
 def format_tanggal(tanggal_str):
     for fmt in ("%Y-%m-%d", "%d-%m-%Y", "%d/%m/%Y", "%Y/%m/%d", "%m/%d/%Y", "%d %b %Y", "%d %B %Y"):
@@ -19,14 +30,52 @@ def format_tanggal(tanggal_str):
             continue
     return tanggal_str
 
+def nopol_to_form(nopol):
+    nopol = nopol.replace(" ", "")
+    if nopol.startswith("KT"):
+        sisa = nopol[2:]
+        nomor = ''.join([c for c in sisa if c.isdigit()])
+        seri = ''.join([c for c in sisa if not c.isdigit()])
+        return "KT", nomor, seri
+    return "KT", "", ""
+
+def get_simpator_info(nopol):
+    kt, nomor, seri = nopol_to_form(nopol)
+    url = "http://simpator.kaltimprov.go.id/cari.php"
+    payload = {
+        "kt": kt,
+        "nomor": nomor,
+        "seri": seri,
+        "pkb": "Process"
+    }
+    try:
+        resp = requests.post(url, data=payload, timeout=10)
+        soup = BeautifulSoup(resp.text, "html.parser")
+        tg_pkb = soup.find("input", {"name": "tg_pkb"})
+        tg_stnk = soup.find("input", {"name": "tg_stnk"})
+        tg_pkb_val = tg_pkb["value"] if tg_pkb else ""
+        tg_stnk_val = tg_stnk["value"] if tg_stnk else ""
+        return tg_pkb_val, tg_stnk_val
+    except Exception:
+        return "", ""
+
+def status_bayar_simpator(tg_pkb):
+    try:
+        pkb_date = datetime.strptime(tg_pkb, "%d-%m-%Y")
+        now = datetime.now()
+        if pkb_date < now:
+            return "BELUM BAYAR"
+        else:
+            return "MASIH HIDUP"
+    except Exception:
+        return "TIDAK DAPAT DITENTUKAN"
+
 def load_data():
     file_path = os.path.join(os.path.dirname(__file__), DATA_FILE)
     if not os.path.exists(file_path):
         st.error(f"File {file_path} tidak ditemukan.")
         return pd.DataFrame()
     df = pd.read_csv(file_path, dtype=str)
-    df['tanggal_pkb'] = df['tanggal_pkb'].apply(format_tanggal)
-    df['tanggal_stnk'] = df['tanggal_stnk'].apply(format_tanggal)
     return df
 
 def save_uploaded_file(uploaded_file):
@@ -50,52 +99,34 @@ def save_cred(user, passwd):
     with open(cred_path, "w") as f:
         f.write(f"{user}\n{passwd}")
 
-def nopol_to_form(nopol):
-    # KTVH 3745 -> KT 3745 VH
-    nopol = nopol.replace(" ", "")
-    if nopol.startswith("KT"):
-        sisa = nopol[2:]
-        nomor = ''.join([c for c in sisa if c.isdigit()])
-        seri = ''.join([c for c in sisa if not c.isdigit()])
-        return "KT", nomor, seri
-    # fallback jika format tidak sesuai
-    return "KT", "", ""
+def load_status_kendaraan():
+    file_path = os.path.join(os.path.dirname(__file__), STATUS_FILE)
+    if not os.path.exists(file_path):
+        return pd.DataFrame(columns=["nopol", "nama", "alamat", "status_kendaraan", "alasan_lainnya", "tanda_tangan", "waktu_lapor"])
+    df = pd.read_csv(file_path, dtype=str)
+    return df
 
-def get_simpator_info(nopol):
-    kt, nomor, seri = nopol_to_form(nopol)
-    url = "http://simpator.kaltimprov.go.id/cari.php"
-    payload = {
-        "kt": kt,
-        "nomor": nomor,
-        "seri": seri,
-        "pkb": "Process"
-    }
-    try:
-        resp = requests.post(url, data=payload, timeout=10)
-        soup = BeautifulSoup(resp.text, "html.parser")
-        tg_pkb = soup.find("input", {"name": "tg_pkb"})
-        tg_stnk = soup.find("input", {"name": "tg_stnk"})
-        tg_pkb_val = tg_pkb["value"] if tg_pkb else ""
-        tg_stnk_val = tg_stnk["value"] if tg_stnk else ""
-        return tg_pkb_val, tg_stnk_val
-    except Exception as e:
-        return "", ""
+def save_status_kendaraan(df):
+    file_path = os.path.join(os.path.dirname(__file__), STATUS_FILE)
+    df.to_csv(file_path, index=False)
 
-def status_bayar_simpator(tg_pkb):
-    # tg_pkb format: dd-mm-yyyy
-    try:
-        pkb_date = datetime.strptime(tg_pkb, "%d-%m-%Y")
-        now = datetime.now()
-        if pkb_date < now:
-            return "BELUM BAYAR"
-        else:
-            return "MASIH HIDUP"
-    except Exception:
-        return "TIDAK DAPAT DITENTUKAN"
+def validasi_nopol(nopol):
+    import re
+    pattern = r"^KT[A-Z]{1,4}\s?\d{3,4}$"
+    return re.match(pattern, nopol.replace(" ", "")) is not None
 
-def main():
-    st.title("Daftar Potensi Kendaraan Motor ASN")
+def load_tambah_kendaraan():
+    file_path = os.path.join(os.path.dirname(__file__), TAMBAH_FILE)
+    if not os.path.exists(file_path):
+        return pd.DataFrame(columns=["nama_instansi", "nopol", "nama_pegawai", "asal_kendaraan", "wilayah_terdaftar", "waktu_input"])
+    df = pd.read_csv(file_path, dtype=str)
+    return df
 
+def save_tambah_kendaraan(df):
+    file_path = os.path.join(os.path.dirname(__file__), TAMBAH_FILE)
+    df.to_csv(file_path, index=False)
+
+def sidebar_login():
     cred = load_cred()
     if "login" not in st.session_state:
         st.session_state.login = False
@@ -134,11 +165,8 @@ def main():
             st.session_state.login = False
             st.stop()
 
-    df = load_data()
-    if df.empty:
-        st.stop()
-
-    st.subheader("Pencarian Data")
+def menu_pencarian_data(df):
+    st.header("Pencarian Data Kendaraan")
     col1, col2, col3 = st.columns(3)
     search_nopol = col1.text_input("Cari Nopol")
     search_nama = col2.text_input("Cari Nama")
@@ -173,16 +201,19 @@ def main():
     st.subheader("Detail Kendaraan Pegawai")
     detail = df[(df['nama_instansi'] == instansi) & (df['nama'] == pegawai)]
     if not detail.empty:
-        nopol = detail.iloc[0]['nopol']
-        st.info(f"Mengambil data PKB & STNK dari Simpator untuk nopol: {nopol}")
-        tg_pkb, tg_stnk = get_simpator_info(nopol)
-        status_bayar = status_bayar_simpator(tg_pkb)
-        # Tampilkan detail dengan data dari Simpator
+        detail_pkb = []
+        detail_stnk = []
+        detail_status_bayar = []
+        for nopol in detail['nopol']:
+            tg_pkb, tg_stnk = get_simpator_info(nopol)
+            detail_pkb.append(tg_pkb)
+            detail_stnk.append(tg_stnk)
+            detail_status_bayar.append(status_bayar_simpator(tg_pkb))
         show_df = detail[['nopol', 'alamat']].copy()
-        show_df['tanggal_pkb'] = tg_pkb
-        show_df['tanggal_stnk'] = tg_stnk
-        show_df['status_kb'] = detail.iloc[0]['status_kb']
-        show_df['status_bayar'] = status_bayar
+        show_df['tanggal_pkb'] = detail_pkb
+        show_df['tanggal_stnk'] = detail_stnk
+        show_df['status_kb'] = detail['status_kb']
+        show_df['status_bayar'] = detail_status_bayar
         st.dataframe(
             show_df,
             use_container_width=True,
@@ -190,6 +221,193 @@ def main():
         )
     else:
         st.info("Data tidak ditemukan.")
+
+def menu_laporan_status(df):
+    st.header("Laporan Status Kendaraan")
+    status_opsi = ["DIJUAL", "RUSAK", "HILANG", "DITARIK LEASING", "ALASAN LAINNYA"]
+
+    # Gunakan session_state untuk alasan lainnya agar tetap tampil dinamis
+    if "status_kendaraan" not in st.session_state:
+        st.session_state.status_kendaraan = status_opsi[0]
+    if "alasan_lainnya" not in st.session_state:
+        st.session_state.alasan_lainnya = ""
+
+    with st.form("form_status_kendaraan"):
+        nopol_lapor = st.text_input("Nomor Polisi (Contoh: KTVV 1234, KTV 1234, KTVVV1234)")
+        nama_lapor = ""
+        alamat_lapor = ""
+        error_nopol = False
+        nopol_terdaftar = False
+
+        if nopol_lapor:
+            if not validasi_nopol(nopol_lapor):
+                st.error("MOHON MASUKKAN NOPOL SESUAI FORMAT")
+                error_nopol = True
+            else:
+                df_nopol = df[df['nopol'].str.replace(" ", "") == nopol_lapor.replace(" ", "")]
+                if not df_nopol.empty:
+                    nama_lapor = df_nopol.iloc[0]['nama']
+                    alamat_lapor = df_nopol.iloc[0]['alamat']
+                    nopol_terdaftar = True
+                    st.info(f"Nama: {nama_lapor}\nAlamat: {alamat_lapor}")
+                else:
+                    st.warning("Nopol tidak ditemukan di data sistem.")
+        else:
+            st.warning("Silahkan mengisi nopol.")
+
+        status_kendaraan = st.selectbox(
+            "Status Kendaraan", status_opsi, 
+            index=status_opsi.index(st.session_state.status_kendaraan) if st.session_state.status_kendaraan in status_opsi else 0,
+            key="status_kendaraan"
+        )
+
+        if st.session_state.status_kendaraan == "ALASAN LAINNYA":
+            alasan_lainnya = st.text_input("Isi Alasan Lainnya", key="alasan_lainnya")
+        else:
+            alasan_lainnya = ""
+
+        tanda_tangan = st.text_input("Tanda Tangan (Nama Pelapor)")
+        submit = st.form_submit_button("Laporkan Status Kendaraan")
+
+        if submit:
+            if not nopol_lapor:
+                st.error("Silahkan mengisi nopol.")
+            elif error_nopol:
+                st.error("MOHON MASUKKAN NOPOL SESUAI FORMAT")
+            elif not nopol_terdaftar:
+                st.error("Masukkan nopol yang terdaftar dalam sistem.")
+            else:
+                waktu_lapor = datetime.now().strftime("%d/%m/%Y %H:%M:%S")
+                df_status = load_status_kendaraan()
+                new_row = {
+                    "nopol": nopol_lapor,
+                    "nama": nama_lapor,
+                    "alamat": alamat_lapor,
+                    "status_kendaraan": st.session_state.status_kendaraan,
+                    "alasan_lainnya": st.session_state.alasan_lainnya if st.session_state.status_kendaraan == "ALASAN LAINNYA" else "",
+                    "tanda_tangan": tanda_tangan,
+                    "waktu_lapor": waktu_lapor
+                }
+                df_status = pd.concat([df_status, pd.DataFrame([new_row])], ignore_index=True)
+                save_status_kendaraan(df_status)
+                st.success("Laporan status kendaraan berhasil disimpan!")
+
+    st.subheader("Download & Rekap Laporan Status Kendaraan")
+    df_status = load_status_kendaraan()
+    if not df_status.empty:
+        st.download_button(
+            label="Download status_kendaraan.csv",
+            data=df_status.to_csv(index=False).encode("utf-8"),
+            file_name="status_kendaraan.csv",
+            mime="text/csv"
+        )
+        rekap_status = df_status.groupby('status_kendaraan').size().reset_index(name='Jumlah Laporan')
+        st.dataframe(rekap_status, use_container_width=True, height=200)
+        st.dataframe(df_status, use_container_width=True, height=250)
+    else:
+        st.info("Belum ada laporan status kendaraan.")
+
+def menu_tambah_kendaraan(df):
+    st.header("Tambah Data Kendaraan Bermotor")
+    df_tambah = load_tambah_kendaraan()
+    instansi_list = sorted(df['nama_instansi'].unique())
+
+    # Daftar kabupaten di Kalimantan Timur
+    kabupaten_kaltim = [
+        "Berau", "Kutai Barat", "Kutai Kartanegara", "Kutai Timur", "Paser",
+        "Penajam Paser Utara", "Balikpapan", "Bontang", "Samarinda", "Mahakam Ulu"
+    ]
+    # Daftar provinsi di Indonesia
+    provinsi_indonesia = [
+        "Aceh", "Sumatera Utara", "Sumatera Barat", "Riau", "Kepulauan Riau", "Jambi", "Sumatera Selatan", "Bangka Belitung",
+        "Bengkulu", "Lampung", "DKI Jakarta", "Jawa Barat", "Banten", "Jawa Tengah", "DI Yogyakarta", "Jawa Timur",
+        "Bali", "Nusa Tenggara Barat", "Nusa Tenggara Timur", "Kalimantan Barat", "Kalimantan Tengah", "Kalimantan Selatan",
+        "Kalimantan Timur", "Kalimantan Utara", "Sulawesi Utara", "Gorontalo", "Sulawesi Tengah", "Sulawesi Barat",
+        "Sulawesi Selatan", "Sulawesi Tenggara", "Maluku", "Maluku Utara", "Papua", "Papua Barat", "Papua Tengah",
+        "Papua Pegunungan", "Papua Selatan", "Papua Barat Daya"
+    ]
+
+    nama_instansi = st.selectbox("Nama Instansi", instansi_list)
+    nopol = st.text_input("Nomor Polisi")
+    nama_pegawai = st.text_input("Nama Pegawai")
+    asal_kendaraan = st.selectbox("Asal Kendaraan", ["KT", "Non KT"])
+
+    wilayah_terdaftar = ""
+    if asal_kendaraan == "KT":
+        st.caption("Masukkan nama Kabupaten apabila masih dalam wilayah KT (Kalimantan Timur)")
+        wilayah_terdaftar = st.selectbox("Wilayah Asal Terdaftar", kabupaten_kaltim)
+    else:
+        st.caption("Masukkan nama Provinsi apabila diluar wilayah KT / Non KT")
+        wilayah_terdaftar = st.selectbox("Wilayah Asal Terdaftar", provinsi_indonesia)
+
+    submit = st.button("Tambah Data Kendaraan")
+
+    if submit:
+        if not nama_instansi or not nopol or not nama_pegawai or not asal_kendaraan or not wilayah_terdaftar:
+            st.error("Semua kolom wajib diisi!")
+        else:
+            waktu_input = datetime.now().strftime("%d/%m/%Y %H:%M:%S")
+            new_row = {
+                "nama_instansi": nama_instansi,
+                "nopol": nopol,
+                "nama_pegawai": nama_pegawai,
+                "asal_kendaraan": asal_kendaraan,
+                "wilayah_terdaftar": wilayah_terdaftar,
+                "waktu_input": waktu_input
+            }
+            if "wilayah_terdaftar" not in df_tambah.columns:
+                df_tambah["wilayah_terdaftar"] = ""
+            df_tambah = pd.concat([df_tambah, pd.DataFrame([new_row])], ignore_index=True)
+            save_tambah_kendaraan(df_tambah)
+            st.success("Data kendaraan berhasil ditambahkan!")
+
+    st.subheader("Rekap Data Kendaraan Baru")
+    if not df_tambah.empty:
+        rekap = df_tambah.groupby('asal_kendaraan').size().reset_index(name='Jumlah')
+        st.dataframe(rekap, use_container_width=True, height=120)
+        st.subheader("Rincian Data Kendaraan Baru")
+        st.dataframe(df_tambah, use_container_width=True, height=250)
+        st.download_button(
+            label="Download Data Kendaraan Baru (CSV)",
+            data=df_tambah.to_csv(index=False).encode("utf-8"),
+            file_name="data_kendaraan_baru.csv",
+            mime="text/csv"
+        )
+    else:
+        st.info("Belum ada data kendaraan baru yang ditambahkan.")
+
+def main():
+    sidebar_login()
+
+    menu = st.sidebar.radio(
+        "Menu Utama",
+        ("Pencarian Data Kendaraan", "Laporan Status Kendaraan", "Tambah Data Kendaraan"),
+        index=0
+    )
+
+    df = load_data()
+    if df.empty:
+        st.stop()
+
+    if menu == "Pencarian Data Kendaraan":
+        menu_pencarian_data(df)
+    elif menu == "Laporan Status Kendaraan":
+        menu_laporan_status(df)
+    elif menu == "Tambah Data Kendaraan":
+        menu_tambah_kendaraan(df)
+
+    # Help Desk menu dengan icon WhatsApp
+    st.sidebar.markdown("---")
+    st.sidebar.markdown("**Help Desk**")
+    st.sidebar.markdown(
+        """
+        <a href="https://wa.me/6285346009498" target="_blank">
+            <img src="https://upload.wikimedia.org/wikipedia/commons/6/6b/WhatsApp.svg" width="25" style="vertical-align:middle;margin-right:8px;">
+            WhatsApp Help Desk
+        </a>
+        """,
+        unsafe_allow_html=True
+    )
 
 if __name__ == "__main__":
     main()
